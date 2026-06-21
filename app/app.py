@@ -828,18 +828,22 @@ elif PAGE == "ai chat":
             """, unsafe_allow_html=True)
 
     st.markdown('<div style="margin-top:20px;">', unsafe_allow_html=True)
+    def _submit_chat_question():
+        question = st.session_state.chat_input.strip()
+        if question:
+            st.session_state.chat_messages.append({"role":"user","content":question})
+            with st.spinner("Searching…"):
+                ans = answer_with_rag(question)
+            st.session_state.chat_messages.append({"role":"assistant","content":ans})
+            st.session_state.chat_input = ""  
+
     inp_col, btn_col = st.columns([5,1], gap="small")
     with inp_col:
-        user_input = st.text_input("", placeholder="Ask about any Tunisian craft…", label_visibility="collapsed", key="chat_input")
+        st.text_input("", placeholder="Ask about any Tunisian craft…", label_visibility="collapsed", key="chat_input", on_change=_submit_chat_question)
     with btn_col:
         send = st.button("Send →", use_container_width=True)
-
-    if send and user_input.strip():
-        st.session_state.chat_messages.append({"role":"user","content":user_input})
-        with st.spinner("Searching…"):
-            ans = answer_with_rag(user_input)
-        st.session_state.chat_messages.append({"role":"assistant","content":ans})
-        st.rerun()
+        if send:
+            _submit_chat_question()
 
     if msgs:
         if st.button("🗑 Clear chat", key="clear_chat"):
