@@ -1,0 +1,43 @@
+{
+  "model_name": "EfficientNet-B0",
+  "num_classes": 10,
+  "image_size": 224,
+  "class_names": [
+    "bijoux_berberes",
+    "bois_sculpte",
+    "broderie_tunisienne",
+    "cuivre",
+    "djebba",
+    "fer_forge",
+    "maroquinerie_tunisienne",
+    "poterie_nabeul",
+    "tapis_kairouan",
+    "verre_souffle"
+  ],
+  "val_accuracy": 90.35,
+  "epochs": 25,
+  "class_to_idx": {
+    "bijoux_berberes": 0,
+    "bois_sculpte": 1,
+    "broderie_tunisienne": 2,
+    "cuivre": 3,
+    "djebba": 4,
+    "fer_forge": 5,
+    "maroquinerie_tunisienne": 6,
+    "poterie_nabeul": 7,
+    "tapis_kairouan": 8,
+    "verre_souffle": 9
+  },
+  "region_map": {
+    "poterie_nabeul": "Nabeul",
+    "tapis_kairouan": "Kairouan",
+    "broderie_tunisienne": "Monastir",
+    "bijoux_berberes": "Djerba",
+    "maroquinerie_tunisienne": "Tunis",
+    "bois_sculpte": "Tunis",
+    "verre_souffle": "Beja",
+    "fer_forge": "Kairouan",
+    "cuivre": "Tunis",
+    "djebba": "Tunis"
+  }
+}

@@ -1,0 +1,16 @@
+torch>=2.2.0
+torchvision>=0.17.0
+numpy>=1.26.0
+pandas>=2.1.0
+Pillow>=10.0.0
+matplotlib>=3.8.0
+scikit-learn>=1.4.0
+icrawler>=0.6.6
+grad-cam>=1.5.0
+faiss-cpu>=1.7.4
+streamlit>=1.32.0
+streamlit-folium>=0.18.0
+folium>=0.15.0
+tqdm>=4.66.0
+jupyter>=1.0.0
+ipykernel>=6.29.0
