@@ -362,7 +362,7 @@ if PAGE == "scan":
 
     _,upc,_ = st.columns([1,3,1])
     with upc:
-        uploaded = st.file_uploader(type=["jpg","jpeg","png"], label_visibility="visible")
+        uploaded = st.file_uploader("Drop image here · JPG, PNG supported", type=["jpg","jpeg","png"], label_visibility="invisible")
 
     if not uploaded:
         st.markdown('<div style="height:80px;"></div>', unsafe_allow_html=True)
