@@ -3,6 +3,5 @@ __pycache__/
 *.pyc
 .DS_Store
 data/raw/
-*.pth
 *.npy
 .ipynb_checkpoints/
