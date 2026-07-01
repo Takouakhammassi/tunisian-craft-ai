@@ -135,7 +135,7 @@ A multi-page **Streamlit** application: Scan (upload & identify), Explore (full 
 ## Project structure
 
 ```
-tunisian-craft-ai/
+tunisian-craft/
 ├── app/
 │   ├── app.py                     
 │   ├── vlm_guard.py                
@@ -159,12 +159,12 @@ tunisian-craft-ai/
 ## Running locally
 ### 1. Clone the repository
 ```bash
-git clone https://github.com/YOUR-USERNAME/tunisian-craft-ai.git
+git clone https://github.com/YOUR-USERNAME/Hirfatuna-tunisian-craft-ai.git
 ```
 
 ### 2. Create a Python virtual 
 ```bash
-cd tunisian-craft-ai
+cd tunisian-craft
 python -m venv venv
 ```
 
