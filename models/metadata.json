@@ -1,5 +1,5 @@
 {
-  "model_name": "EfficientNet-B0",
+  "model_name": "ResNet-50 (30% fine-tuned)",
   "num_classes": 10,
   "image_size": 224,
   "class_names": [
@@ -14,7 +14,7 @@
     "tapis_kairouan",
     "verre_souffle"
   ],
-  "val_accuracy": 90.35,
+  "val_accuracy": 90.81,
   "epochs": 25,
   "class_to_idx": {
     "bijoux_berberes": 0,

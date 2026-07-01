@@ -38,7 +38,6 @@ REGION_BY_CATEGORY = {
 
 CLASS_NAMES = sorted(REGION_BY_CATEGORY.keys())
 NUM_CLASSES = len(CLASS_NAMES)
-
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -66,7 +65,6 @@ VAL_TRANSFORM = transforms.Compose(
 
 
 class CraftDataset(Dataset):
-
     def __init__(self, dataframe: pd.DataFrame, transform=None):
         self.dataframe = dataframe.reset_index(drop=True)
         self.transform = transform
@@ -94,13 +92,15 @@ def load_data_loaders(csv_path: Path):
 
 
 def build_model(num_classes: int) -> nn.Module:
-    model = models.efficientnet_b0(weights="IMAGENET1K_V1")
+    model = models.resnet50(weights="IMAGENET1K_V2")
 
-    for param in list(model.parameters())[:-20]:
+    all_params = list(model.parameters())
+    num_to_unfreeze = max(1, int(len(all_params) * 0.30))
+    for param in all_params[:-num_to_unfreeze]:
         param.requires_grad = False
 
-    in_features = model.classifier[1].in_features
-    model.classifier = nn.Sequential(nn.Dropout(0.3), nn.Linear(in_features, 256), nn.ReLU(), nn.Dropout(0.2), nn.Linear(256, num_classes))
+    in_features = model.fc.in_features
+    model.fc = nn.Sequential(nn.Dropout(0.3), nn.Linear(in_features, num_classes))
     return model.to(DEVICE)
 
 
@@ -205,10 +205,9 @@ def evaluate_and_plot_confusion_matrix(model, val_loader, class_names, output_pa
     plt.savefig(output_path, dpi=100)
     plt.close()
 
-
 def save_metadata(model_dir: Path, class_names: list[str], best_accuracy: float) -> None:
     metadata = {
-        "model_name": "EfficientNet-B0",
+        "model_name": "ResNet-50 (30% fine-tuned)",
         "num_classes": len(class_names),
         "image_size": IMAGE_SIZE,
         "class_names": class_names,
@@ -236,6 +235,8 @@ def main() -> None:
     plot_training_curves(history, MODEL_DIR / "training_curves.png")
     evaluate_and_plot_confusion_matrix(model, val_loader, CLASS_NAMES, MODEL_DIR / "confusion_matrix.png")
     save_metadata(MODEL_DIR, CLASS_NAMES, best_accuracy)
+
+    print(f"\nsaved model and metadata to {MODEL_DIR}")
 
 
 if __name__ == "__main__":

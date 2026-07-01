@@ -7,6 +7,7 @@ from io import BytesIO
 from pathlib import Path
 import folium
 from streamlit_folium import st_folium
+from vlm_guard import is_craft_image, NOT_A_CRAFT_MESSAGE
 
 st.set_page_config(page_title="Hirfatuna", page_icon="🏺", layout="wide", initial_sidebar_state="collapsed")
 
@@ -82,9 +83,11 @@ MODEL_PATH = Path(__file__).parent.parent / "models" / "best_model.pth"
 def load_model():
     with open(META_PATH, encoding="utf-8") as f:
         meta = json.load(f)
-    m = models.efficientnet_b0(weights=None)
-    in_f = m.classifier[1].in_features
-    m.classifier = nn.Sequential(nn.Dropout(0.3), nn.Linear(in_f, 256), nn.ReLU(), nn.Dropout(0.2), nn.Linear(256, meta["num_classes"]))
+    # ResNet-50, fine-tuned with the top 30% of layers unfrozen 
+    # selected after a comparative study across 5 architectures x 4 fine-tuning depths where it achieved the best validation accuracy (90.8%) 
+    m = models.resnet50(weights=None)
+    in_f = m.fc.in_features
+    m.fc = nn.Sequential(nn.Dropout(0.3), nn.Linear(in_f, meta["num_classes"]))
     m.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
     m.eval()
     return m, meta
@@ -103,7 +106,7 @@ def gradcam(img, tensor, model):
         from pytorch_grad_cam import GradCAM
         from pytorch_grad_cam.utils.image import show_cam_on_image
         np_img = np.array(img.resize((224,224))).astype(np.float32)/255.
-        cam = GradCAM(model=model, target_layers=[model.features[-1]])
+        cam = GradCAM(model=model, target_layers=[model.layer4[-1]])
         return show_cam_on_image(np_img, cam(input_tensor=tensor)[0], use_rgb=True)
     except Exception:
         return None
@@ -112,6 +115,16 @@ def b64(img, size=(700,700)):
     i=img.copy(); i.thumbnail(size,Image.LANCZOS)
     buf=BytesIO(); i.save(buf,"JPEG",quality=90)
     return base64.b64encode(buf.getvalue()).decode()
+
+def get_hf_token():
+    # Reads the Hugging Face token from Streamlit secrets
+    try:
+        return st.secrets["HF_TOKEN"]
+    except Exception:
+        import os
+        return os.environ.get("HF_TOKEN")
+
+HF_TOKEN = get_hf_token()
 
 try:
     model, meta = load_model()
@@ -370,221 +383,237 @@ if PAGE == "scan":
     if uploaded and model_ok:
         img_pil = Image.open(uploaded).convert("RGB")
 
-        with st.spinner("Analyzing your craft object…"):
-            idx, probs, tensor = predict(img_pil, model)
-            pred_key = CLASS_NAMES[idx]
-            conf = float(probs[idx])
-            linfo = label_for(pred_key)
-            region = RMAP.get(pred_key,"Tunisia")
-            craft_data = CRAFTS.get(pred_key,{})
-            cam = gradcam(img_pil, tensor, model)
-            b64_orig = b64(img_pil)
-            b64_cam = b64(Image.fromarray(cam)) if cam is not None else None
-            accent = linfo.get("color","#c8965a")
-            rinfo = REGIONS.get(region,{"color":"#c8965a","coords":[33.8,9.5]})
-
-            st.session_state.history.insert(0,{"b64":b64(img_pil,(240,240)),"label":linfo["en"], "emoji":linfo["emoji"],"region":region, "confidence":conf,"key":pred_key})
-            if len(st.session_state.history)>16:
-                st.session_state.history = st.session_state.history[:16]
-
-        st.markdown(f"""
-        <div style="max-width:1100px;margin:40px auto 0;padding:0 32px;">
-          <div style="background:linear-gradient(135deg,{accent}1a,{accent}08);
-               border:2px solid {accent}33;border-radius:24px;
-               padding:32px 36px;display:flex;align-items:center;
-               gap:20px;flex-wrap:wrap;justify-content:center;">
-            <div style="width:76px;height:76px;
-                 background:linear-gradient(135deg,{accent},{accent}99);
-                 border-radius:18px;display:flex;align-items:center;
-                 justify-content:center;font-size:36px;flex-shrink:0;">{linfo['emoji']}</div>
-            <div>
-              <p style="font-size:11px;letter-spacing:1px;
-                 color:{accent};font-weight:500;margin-bottom:6px;">Identified as</p>
-              <h2 style="font-family:'Playfair Display',serif;
-                 font-size:clamp(24px,4vw,42px);font-weight:700;
-                 color:#1a1208;margin:0;line-height:1.1;">{linfo['en']}</h2>
-              <p style="font-size:18px;color:{accent};margin:5px 0 0;font-style:italic;">{linfo['ar']}</p>
-            </div>
-            <div style="text-align:center;background:white;border-radius:14px;
-                 padding:14px 22px;border:1px solid #e8d0b0;">
-              <p style="font-size:10px;color:#8a6a45;margin:0 0 3px;
-                 letter-spacing:1px;">Origin</p>
-              <p style="font-size:20px;font-weight:600;color:#1a1208;margin:0;">📍 {region}</p>
-            </div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown('<div style="max-width:1100px;margin:58px auto 0;padding:0 52px;">', unsafe_allow_html=True)
-        c1,c2 = st.columns([1,1], gap="large")
-        with c1:
-            st.markdown(f"""
-            <p style="font-size:11px;font-weight:600;color:#8a6a45;
-               text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">Your Photo</p>
-            <div style="border-radius:18px;overflow:hidden;border:1px solid #e8d0b0;
-                 box-shadow:0 8px 32px rgba(200,150,90,.1);">
-              <img src="data:image/jpeg;base64,{b64_orig}"
-                   style="width:100%;display:block;object-fit:cover;max-height:420px;">
-            </div>
-            """, unsafe_allow_html=True)
-        with c2:
-            st.markdown(f"""
-            <p style="font-size:11px;font-weight:600;color:#8a6a45;
-               text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">Geographic Origin</p>
-            <div style="background:white;border-radius:14px;padding:14px 18px;
-                 border:1px solid #e8d0b0;margin-bottom:14px;
-                 display:flex;align-items:center;gap:12px;">
-              <div style="width:42px;height:42px;background:{rinfo['color']}18;
-                   border-radius:10px;display:flex;align-items:center;
-                   justify-content:center;font-size:20px;">📍</div>
-              <div>
-                <p style="font-size:17px;font-weight:600;color:#1a1208;margin:0;">{region}</p>
-                <p style="font-size:12px;color:#8a6a45;margin:2px 0 0;">{rinfo.get('specialty','')}</p>
-              </div>
-            </div>
-            """, unsafe_allow_html=True)
-            mmap = folium.Map(location=[33.8,9.5], zoom_start=6, tiles="CartoDB positron")
-            rc = rinfo.get("coords",[33.8,9.5])
-            folium.CircleMarker(rc,radius=22,color=rinfo["color"],fill=True, fill_color=rinfo["color"],fill_opacity=.18,weight=2).add_to(mmap)
-            folium.CircleMarker(rc,radius=7,color=rinfo["color"],fill=True, fill_color=rinfo["color"],fill_opacity=1,weight=0).add_to(mmap)
-            st_folium(mmap, width=None, height=300, returned_objects=[])
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        history_txt = craft_data.get("history","—")
-        techniques = ", ".join(craft_data.get("techniques",["—"])[:4])
-        fun_fact = craft_data.get("fun_fact","—")
-        time_create = craft_data.get("time_to_create","—")
-        materials = ", ".join(craft_data.get("materials",["—"]))
-        types_list = craft_data.get("types",[])
-        tags = craft_data.get("tags",[])
-
-        tags_html = "".join(
-            f'<span style="font-size:11px;background:{accent}1a;color:{accent};'
-            f'padding:3px 10px;border-radius:20px;font-weight:500;margin:2px;'
-            f'display:inline-block;">{tg}</span>' for tg in tags
-        )
-        types_html = "".join(
-            f'<p style="font-size:12px;color:#6a5a45;margin:3px 0;font-weight:300;">• {tp}</p>'
-            for tp in types_list[:4]
-        )
-
-        st.markdown(f"""
-        <div style="max-width:1100px;margin:32px auto 0;padding:0 32px;">
-          <h3 style="font-family:'Playfair Display',serif;font-size:24px;
-             font-weight:600;color:#1a1208;margin-bottom:20px;">History &amp; Craftsmanship</h3>
-        </div>
-        """, unsafe_allow_html=True)
-
-        _, story_area, _ = st.columns([0.04, 1.92, 0.04])
-        with story_area:
-            sc1, sc2, sc3 = st.columns(3, gap="medium")
-
-            with sc1:
-                st.markdown(f"""<div style="background:white;border-radius:18px;padding:24px;
-                     border:1px solid #f0e4d0;box-shadow:0 4px 20px rgba(200,150,90,.06);height:100%;">
-                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
-                    <div style="width:32px;height:32px;background:{accent}18;border-radius:8px;
-                         display:flex;align-items:center;justify-content:center;font-size:16px;">📖</div>
-                    <p style="font-size:11px;font-weight:600;color:{accent};
-                       text-transform:uppercase;letter-spacing:1px;margin:0;">History</p>
-                  </div>
-                  <p style="font-size:13.5px;color:#4a3a28;line-height:1.75;margin:0;font-weight:300;">{history_txt}</p>
-                </div>""", unsafe_allow_html=True)
-
-            with sc2:
-                st.markdown(f"""<div style="background:white;border-radius:18px;padding:24px;
-                     border:1px solid #f0e4d0;box-shadow:0 4px 20px rgba(200,150,90,.06);height:100%;">
-                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
-                    <div style="width:32px;height:32px;background:{accent}18;border-radius:8px;
-                         display:flex;align-items:center;justify-content:center;font-size:16px;">🛠️</div>
-                    <p style="font-size:11px;font-weight:600;color:{accent};
-                       text-transform:uppercase;letter-spacing:1px;margin:0;">Techniques</p>
-                  </div>
-                  <p style="font-size:13.5px;color:#4a3a28;line-height:1.75;margin:0 0 16px;font-weight:300;">{techniques}</p>
-                  <div style="background:{accent}0d;border-radius:10px;padding:12px 14px;">
-                    <p style="font-size:10px;font-weight:600;color:{accent};
-                       text-transform:uppercase;letter-spacing:1px;margin:0 0 5px;">Materials</p>
-                    <p style="font-size:12px;color:#6a5a45;margin:0 0 10px;font-weight:300;">{materials}</p>
-                    <p style="font-size:10px;font-weight:600;color:{accent};
-                       text-transform:uppercase;letter-spacing:1px;margin:0 0 5px;">Time to Create</p>
-                    <p style="font-size:12px;color:#6a5a45;margin:0;font-weight:300;">{time_create}</p>
-                  </div>
-                </div>""", unsafe_allow_html=True)
-
-            with sc3:
-                st.markdown(f"""<div style="background:linear-gradient(135deg,{accent}14,{accent}06);
-                     border-radius:18px;padding:24px;border:1.5px solid {accent}22;
-                     box-shadow:0 4px 20px rgba(200,150,90,.08);height:100%;">
-                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
-                    <div style="width:32px;height:32px;background:{accent}22;border-radius:8px;
-                         display:flex;align-items:center;justify-content:center;font-size:16px;">✨</div>
-                    <p style="font-size:11px;font-weight:600;color:{accent};
-                       text-transform:uppercase;letter-spacing:1px;margin:0;">Did You Know?</p>
-                  </div>
-                  <p style="font-size:15px;font-family:'Playfair Display',serif;font-style:italic;
-                     color:#1a1208;line-height:1.7;margin:0 0 16px;">&ldquo;{fun_fact}&rdquo;</p>
-                  <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">{tags_html}</div>
-                  {types_html}
-                </div>""", unsafe_allow_html=True)
-
-        if b64_cam:
-            st.markdown(f"""
-            <div style="max-width:1100px;margin:32px auto 0;padding:0 32px;">
-              <h3 style="font-family:'Playfair Display',serif;font-size:24px;
-                 font-weight:600;color:#1a1208;margin-bottom:8px;">How the AI Sees It</h3>
-              <p style="font-size:13px;color:#8a6a45;margin:0 0 20px;font-weight:300;">
-                Red zones show which parts of the image the AI focused on most
-              </p>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;max-width:820px;">
-                <div>
-                  <p style="font-size:11px;font-weight:600;color:#8a6a45;margin:0 0 10px;
-                     text-transform:uppercase;letter-spacing:1px;">Original</p>
-                  <div style="border-radius:14px;overflow:hidden;border:1px solid #e8d0b0;">
-                    <img src="data:image/jpeg;base64,{b64_orig}"
-                         style="width:100%;display:block;object-fit:cover;max-height:280px;">
+        proceed_to_classification = True
+        if HF_TOKEN:
+            with st.spinner("Checking your photo…"):
+                looks_like_craft, guard_available = is_craft_image(img_pil, HF_TOKEN)
+            if guard_available and not looks_like_craft:
+                proceed_to_classification = False
+                st.markdown(f"""
+                <div style="max-width:720px;margin:40px auto 0;padding:0 24px;text-align:center;">
+                  <div style="background:white;border-radius:18px;padding:32px;
+                       border:1px solid #f0e4d0;box-shadow:0 4px 20px rgba(200,150,90,.06);">
+                    <p style="font-size:15px;color:#1a1208;font-weight:500;margin:0;">{NOT_A_CRAFT_MESSAGE}</p>
                   </div>
                 </div>
+                """, unsafe_allow_html=True)
+
+        if proceed_to_classification:
+            with st.spinner("Analyzing your craft object…"):
+                idx, probs, tensor = predict(img_pil, model)
+                pred_key = CLASS_NAMES[idx]
+                conf = float(probs[idx])
+                linfo = label_for(pred_key)
+                region = RMAP.get(pred_key,"Tunisia")
+                craft_data = CRAFTS.get(pred_key,{})
+                cam = gradcam(img_pil, tensor, model)
+                b64_orig = b64(img_pil)
+                b64_cam = b64(Image.fromarray(cam)) if cam is not None else None
+                accent = linfo.get("color","#c8965a")
+                rinfo = REGIONS.get(region,{"color":"#c8965a","coords":[33.8,9.5]})
+
+                st.session_state.history.insert(0,{"b64":b64(img_pil,(240,240)),"label":linfo["en"], "emoji":linfo["emoji"],"region":region, "confidence":conf,"key":pred_key})
+                if len(st.session_state.history)>16:
+                    st.session_state.history = st.session_state.history[:16]
+
+            st.markdown(f"""
+            <div style="max-width:1100px;margin:40px auto 0;padding:0 32px;">
+              <div style="background:linear-gradient(135deg,{accent}1a,{accent}08);
+                   border:2px solid {accent}33;border-radius:24px;
+                   padding:32px 36px;display:flex;align-items:center;
+                   gap:20px;flex-wrap:wrap;justify-content:center;">
+                <div style="width:76px;height:76px;
+                     background:linear-gradient(135deg,{accent},{accent}99);
+                     border-radius:18px;display:flex;align-items:center;
+                     justify-content:center;font-size:36px;flex-shrink:0;">{linfo['emoji']}</div>
                 <div>
-                  <p style="font-size:11px;font-weight:600;color:{accent};margin:0 0 10px;
-                     text-transform:uppercase;letter-spacing:1px;">AI Focus Map</p>
-                  <div style="border-radius:14px;overflow:hidden;border:1.5px solid {accent}55;">
-                    <img src="data:image/jpeg;base64,{b64_cam}"
-                         style="width:100%;display:block;object-fit:cover;max-height:280px;">
-                  </div>
+                  <p style="font-size:11px;letter-spacing:1px;
+                     color:{accent};font-weight:500;margin-bottom:6px;">Identified as</p>
+                  <h2 style="font-family:'Playfair Display',serif;
+                     font-size:clamp(24px,4vw,42px);font-weight:700;
+                     color:#1a1208;margin:0;line-height:1.1;">{linfo['en']}</h2>
+                  <p style="font-size:18px;color:{accent};margin:5px 0 0;font-style:italic;">{linfo['ar']}</p>
+                </div>
+                <div style="text-align:center;background:white;border-radius:14px;
+                     padding:14px 22px;border:1px solid #e8d0b0;">
+                  <p style="font-size:10px;color:#8a6a45;margin:0 0 3px;
+                     letter-spacing:1px;">Origin</p>
+                  <p style="font-size:20px;font-weight:600;color:#1a1208;margin:0;">📍 {region}</p>
                 </div>
               </div>
             </div>
             """, unsafe_allow_html=True)
 
-        similar = CRAFTS.get(pred_key,{}).get("similar",[])
-        valid_similar = [sid for sid in similar if sid in CRAFTS]
-        if valid_similar:
+            st.markdown('<div style="max-width:1100px;margin:58px auto 0;padding:0 52px;">', unsafe_allow_html=True)
+            c1,c2 = st.columns([1,1], gap="large")
+            with c1:
+                st.markdown(f"""
+                <p style="font-size:11px;font-weight:600;color:#8a6a45;
+                   text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">Your Photo</p>
+                <div style="border-radius:18px;overflow:hidden;border:1px solid #e8d0b0;
+                     box-shadow:0 8px 32px rgba(200,150,90,.1);">
+                  <img src="data:image/jpeg;base64,{b64_orig}"
+                       style="width:100%;display:block;object-fit:cover;max-height:420px;">
+                </div>
+                """, unsafe_allow_html=True)
+            with c2:
+                st.markdown(f"""
+                <p style="font-size:11px;font-weight:600;color:#8a6a45;
+                   text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">Geographic Origin</p>
+                <div style="background:white;border-radius:14px;padding:14px 18px;
+                     border:1px solid #e8d0b0;margin-bottom:14px;
+                     display:flex;align-items:center;gap:12px;">
+                  <div style="width:42px;height:42px;background:{rinfo['color']}18;
+                       border-radius:10px;display:flex;align-items:center;
+                       justify-content:center;font-size:20px;">📍</div>
+                  <div>
+                    <p style="font-size:17px;font-weight:600;color:#1a1208;margin:0;">{region}</p>
+                    <p style="font-size:12px;color:#8a6a45;margin:2px 0 0;">{rinfo.get('specialty','')}</p>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+                mmap = folium.Map(location=[33.8,9.5], zoom_start=6, tiles="CartoDB positron")
+                rc = rinfo.get("coords",[33.8,9.5])
+                folium.CircleMarker(rc,radius=22,color=rinfo["color"],fill=True, fill_color=rinfo["color"],fill_opacity=.18,weight=2).add_to(mmap)
+                folium.CircleMarker(rc,radius=7,color=rinfo["color"],fill=True, fill_color=rinfo["color"],fill_opacity=1,weight=0).add_to(mmap)
+                st_folium(mmap, width=None, height=300, returned_objects=[])
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            history_txt = craft_data.get("history","—")
+            techniques = ", ".join(craft_data.get("techniques",["—"])[:4])
+            fun_fact = craft_data.get("fun_fact","—")
+            time_create = craft_data.get("time_to_create","—")
+            materials = ", ".join(craft_data.get("materials",["—"]))
+            types_list = craft_data.get("types",[])
+            tags = craft_data.get("tags",[])
+
+            tags_html = "".join(
+                f'<span style="font-size:11px;background:{accent}1a;color:{accent};'
+                f'padding:3px 10px;border-radius:20px;font-weight:500;margin:2px;'
+                f'display:inline-block;">{tg}</span>' for tg in tags
+            )
+            types_html = "".join(
+                f'<p style="font-size:12px;color:#6a5a45;margin:3px 0;font-weight:300;">• {tp}</p>'
+                for tp in types_list[:4]
+            )
+
             st.markdown(f"""
             <div style="max-width:1100px;margin:32px auto 0;padding:0 32px;">
               <h3 style="font-family:'Playfair Display',serif;font-size:24px;
-                 font-weight:600;color:#1a1208;margin-bottom:8px;">You Might Also Like</h3>
+                 font-weight:600;color:#1a1208;margin-bottom:20px;">History &amp; Craftsmanship</h3>
             </div>
             """, unsafe_allow_html=True)
 
-            _, rec_area, _ = st.columns([1,6,1])
-            with rec_area:
-                rec_cols = st.columns(len(valid_similar), gap="small")
-                for col, sid in zip(rec_cols, valid_similar):
-                    sc = CRAFTS.get(sid,{})
-                    sl = label_for(sid)
-                    with col:
-                        st.markdown(f"""
-                        <div style="background:white;border-radius:16px;padding:18px 20px;
-                             border:1px solid #f0e4d0;text-align:center;
-                             box-shadow:0 4px 16px rgba(200,150,90,.06);">
-                          <div style="font-size:28px;margin-bottom:10px;">{sl['emoji']}</div>
-                          <p style="font-size:14px;font-weight:600;color:#1a1208;margin:0 0 4px;">{sl['en']}</p>
-                          <p style="font-size:11px;color:{sl['color']};margin:0 0 10px;font-style:italic;">{sl.get('ar','')}</p>
-                          <p style="font-size:12px;color:#8a6a45;margin:0;font-weight:300;">📍 {sc.get('region','')}</p>
-                        </div>
-                        """, unsafe_allow_html=True)
+            _, story_area, _ = st.columns([0.04, 1.92, 0.04])
+            with story_area:
+                sc1, sc2, sc3 = st.columns(3, gap="medium")
 
-        st.markdown('<div style="height:60px;"></div>', unsafe_allow_html=True)
+                with sc1:
+                    st.markdown(f"""<div style="background:white;border-radius:18px;padding:24px;
+                         border:1px solid #f0e4d0;box-shadow:0 4px 20px rgba(200,150,90,.06);height:100%;">
+                      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+                        <div style="width:32px;height:32px;background:{accent}18;border-radius:8px;
+                             display:flex;align-items:center;justify-content:center;font-size:16px;">📖</div>
+                        <p style="font-size:11px;font-weight:600;color:{accent};
+                           text-transform:uppercase;letter-spacing:1px;margin:0;">History</p>
+                      </div>
+                      <p style="font-size:13.5px;color:#4a3a28;line-height:1.75;margin:0;font-weight:300;">{history_txt}</p>
+                    </div>""", unsafe_allow_html=True)
+
+                with sc2:
+                    st.markdown(f"""<div style="background:white;border-radius:18px;padding:24px;
+                         border:1px solid #f0e4d0;box-shadow:0 4px 20px rgba(200,150,90,.06);height:100%;">
+                      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+                        <div style="width:32px;height:32px;background:{accent}18;border-radius:8px;
+                             display:flex;align-items:center;justify-content:center;font-size:16px;">🛠️</div>
+                        <p style="font-size:11px;font-weight:600;color:{accent};
+                           text-transform:uppercase;letter-spacing:1px;margin:0;">Techniques</p>
+                      </div>
+                      <p style="font-size:13.5px;color:#4a3a28;line-height:1.75;margin:0 0 16px;font-weight:300;">{techniques}</p>
+                      <div style="background:{accent}0d;border-radius:10px;padding:12px 14px;">
+                        <p style="font-size:10px;font-weight:600;color:{accent};
+                           text-transform:uppercase;letter-spacing:1px;margin:0 0 5px;">Materials</p>
+                        <p style="font-size:12px;color:#6a5a45;margin:0 0 10px;font-weight:300;">{materials}</p>
+                        <p style="font-size:10px;font-weight:600;color:{accent};
+                           text-transform:uppercase;letter-spacing:1px;margin:0 0 5px;">Time to Create</p>
+                        <p style="font-size:12px;color:#6a5a45;margin:0;font-weight:300;">{time_create}</p>
+                      </div>
+                    </div>""", unsafe_allow_html=True)
+
+                with sc3:
+                    st.markdown(f"""<div style="background:linear-gradient(135deg,{accent}14,{accent}06);
+                         border-radius:18px;padding:24px;border:1.5px solid {accent}22;
+                         box-shadow:0 4px 20px rgba(200,150,90,.08);height:100%;">
+                      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+                        <div style="width:32px;height:32px;background:{accent}22;border-radius:8px;
+                             display:flex;align-items:center;justify-content:center;font-size:16px;">✨</div>
+                        <p style="font-size:11px;font-weight:600;color:{accent};
+                           text-transform:uppercase;letter-spacing:1px;margin:0;">Did You Know?</p>
+                      </div>
+                      <p style="font-size:15px;font-family:'Playfair Display',serif;font-style:italic;
+                         color:#1a1208;line-height:1.7;margin:0 0 16px;">&ldquo;{fun_fact}&rdquo;</p>
+                      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">{tags_html}</div>
+                      {types_html}
+                    </div>""", unsafe_allow_html=True)
+
+            if b64_cam:
+                st.markdown(f"""
+                <div style="max-width:1100px;margin:32px auto 0;padding:0 32px;">
+                  <h3 style="font-family:'Playfair Display',serif;font-size:24px;
+                     font-weight:600;color:#1a1208;margin-bottom:8px;">How the AI Sees It</h3>
+                  <p style="font-size:13px;color:#8a6a45;margin:0 0 20px;font-weight:300;">
+                    Red zones show which parts of the image the AI focused on most
+                  </p>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;max-width:820px;">
+                    <div>
+                      <p style="font-size:11px;font-weight:600;color:#8a6a45;margin:0 0 10px;
+                         text-transform:uppercase;letter-spacing:1px;">Original</p>
+                      <div style="border-radius:14px;overflow:hidden;border:1px solid #e8d0b0;">
+                        <img src="data:image/jpeg;base64,{b64_orig}"
+                             style="width:100%;display:block;object-fit:cover;max-height:280px;">
+                      </div>
+                    </div>
+                    <div>
+                      <p style="font-size:11px;font-weight:600;color:{accent};margin:0 0 10px;
+                         text-transform:uppercase;letter-spacing:1px;">AI Focus Map</p>
+                      <div style="border-radius:14px;overflow:hidden;border:1.5px solid {accent}55;">
+                        <img src="data:image/jpeg;base64,{b64_cam}"
+                             style="width:100%;display:block;object-fit:cover;max-height:280px;">
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            similar = CRAFTS.get(pred_key,{}).get("similar",[])
+            valid_similar = [sid for sid in similar if sid in CRAFTS]
+            if valid_similar:
+                st.markdown(f"""
+                <div style="max-width:1100px;margin:32px auto 0;padding:0 32px;">
+                  <h3 style="font-family:'Playfair Display',serif;font-size:24px;
+                     font-weight:600;color:#1a1208;margin-bottom:8px;">You Might Also Like</h3>
+                </div>
+                """, unsafe_allow_html=True)
+
+                _, rec_area, _ = st.columns([1,6,1])
+                with rec_area:
+                    rec_cols = st.columns(len(valid_similar), gap="small")
+                    for col, sid in zip(rec_cols, valid_similar):
+                        sc = CRAFTS.get(sid,{})
+                        sl = label_for(sid)
+                        with col:
+                            st.markdown(f"""
+                            <div style="background:white;border-radius:16px;padding:18px 20px;
+                                 border:1px solid #f0e4d0;text-align:center;
+                                 box-shadow:0 4px 16px rgba(200,150,90,.06);">
+                              <div style="font-size:28px;margin-bottom:10px;">{sl['emoji']}</div>
+                              <p style="font-size:14px;font-weight:600;color:#1a1208;margin:0 0 4px;">{sl['en']}</p>
+                              <p style="font-size:11px;color:{sl['color']};margin:0 0 10px;font-style:italic;">{sl.get('ar','')}</p>
+                              <p style="font-size:12px;color:#8a6a45;margin:0;font-weight:300;">📍 {sc.get('region','')}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+            st.markdown('<div style="height:60px;"></div>', unsafe_allow_html=True)
 
     elif uploaded and not model_ok:
         st.error("Model files not found. Please make sure `models/best_model.pth` and `models/metadata.json` exist.")
